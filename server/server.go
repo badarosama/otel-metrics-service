@@ -20,7 +20,9 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -185,8 +187,19 @@ func main() {
 		http.ListenAndServe(":9091", nil)
 	}()
 
-	logger.Info("Server is listening on port 8080...")
-	if err := s.Serve(listener); err != nil {
-		logger.Fatal("Failed to serve", zap.Error(err))
-	}
+	// Graceful shutdown on SIGINT/SIGTERM.
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+
+	go func() {
+		logger.Info("Server is listening on port 8080...")
+		if err := s.Serve(listener); err != nil {
+			logger.Fatal("Failed to serve", zap.Error(err))
+		}
+	}()
+
+	sig := <-quit
+	logger.Info("Received shutdown signal, draining connections...", zap.String("signal", sig.String()))
+	s.GracefulStop()
+	logger.Info("Server stopped gracefully")
 }

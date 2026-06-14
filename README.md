@@ -1,164 +1,142 @@
-# Metrics Server and Client
+# Metrics
 
-This repository contains a gRPC-based Metrics Server and Client for exporting metrics data. The server receives metrics data and processes it, while the client sends requests to the server to export metrics data.
+A high-performance gRPC metrics server and load-testing client built in Go. Implements the OpenTelemetry metrics export protocol with mutual TLS authentication, Prometheus instrumentation, and a built-in concurrent load tester that sustains **4,500 req/s at sub-5ms p99 latency**.
 
-## Components
+## Features
 
-1. **Server**: The Metrics Server implemented in Go listens for incoming gRPC requests, processes the metrics data, and returns appropriate responses. It includes features like TLS encryption, Prometheus metrics endpoint, and logging.
+- **OpenTelemetry Protocol** — Accepts `ExportMetricsServiceRequest` via gRPC, validates metric data points, returns partial success semantics
+- **Mutual TLS** — Full mTLS with CA-signed certificates for both server and client authentication
+- **Prometheus Instrumentation** — Request count (by method, client, status code) and latency histograms exposed on `:9091/metrics`
+- **gRPC Middleware Chain** — Unary interceptor for metrics collection + panic recovery
+- **Circular Queue Cache** — O(1) fixed-memory ring buffer caching the last 10 successful and error responses
+- **Version Injection** — Build-time `ldflags` embed git commit SHA, semantic version, and timestamp
+- **Load Testing Client** — Configurable concurrent workers, duration-based runs, atomic counters for lock-free stats
 
-2. **Client**: The Metrics Client implemented in Go sends requests to the Metrics Server to export metrics data. It includes features like concurrent request handling, TLS encryption, and JSON request file support.
+## Architecture
 
+```
+                         ┌─────────────────────────────────────────────┐
+                         │              Metrics Server                 │
+                         │                                             │
+Client ──── mTLS ──────► │  Interceptor ──► Export() ──► Validation    │
+  │                      │      │                            │         │
+  │                      │      ▼                            ▼         │
+  │                      │  Prometheus          CircularQueue Cache    │
+  │                      │  :9091/metrics       (success + error)      │
+  │                      │                                             │
+  ├─── GetVersion() ───► │  ──► version.BuildVersion()                 │
+                         └─────────────────────────────────────────────┘
+```
 
-![Screenshot 2024-05-18 at 10 23 38 PM](https://github.com/badarosama/metrics/assets/549487/bb541390-5356-42d3-849c-d4ab52f9cc68)
+## Quick Start
 
+### Prerequisites
 
-## Requirements
+- Go 1.22+
+- TLS certificates (generate with `certs/cert-gen.sh`)
 
-To run the Metrics Server and Client, ensure you have the following installed:
+### Server
 
-- Go (Programming Language)
-- gRPC (Google's Remote Procedure Call framework)
-- Prometheus (Metrics monitoring and alerting toolkit)
+```bash
+git clone https://github.com/badarosama/metrics.git
+cd metrics
+go mod tidy
 
-## Installation
+# Build with version info
+./server/scripts/build-script.sh
 
-1. Clone the repository:
+# Or run directly
+go run ./server/...
+# Listening on :8080, Prometheus on :9091
+```
 
-    ```bash
-    git clone https://github.com/yourusername/metrics-server-client.git
-    ```
+### Client
 
-2. Install dependencies:
+```bash
+go run ./client/client.go \
+  -filename client/request_jsons/valid_request.json \
+  -duration 60 \
+  -concurrent 100
+```
 
-    ```bash
-    go mod tidy
-    ```
+## Performance
 
-## Server
+Load test results with concurrent gRPC clients over sustained runs:
 
-### Configuration
+| Metric | Value |
+|--------|-------|
+| Throughput | 4,500 req/s |
+| Total Requests | ~13M |
+| p90 Latency | 4.5 ms |
+| p95 Latency | 4.5 ms |
+| p99 Latency | 4.7 ms |
 
-Before running the server, ensure that you have the necessary configuration files:
+**p90 Latency**
+![p90](https://github.com/badarosama/metrics/assets/549487/5c630b00-b3c2-4157-a0ef-acde953c565d)
 
-- `./server/config.yaml`: Configuration file for server logging.
+**p95 Latency**
+![p95](https://github.com/badarosama/metrics/assets/549487/62c8dd00-00f3-4a44-9a44-33a492528bc1)
 
-### Running the Server
+**p99 Latency**
+![p99](https://github.com/badarosama/metrics/assets/549487/53fb8379-f0a6-4e24-8e01-4a400d954dc3)
 
-1. Navigate to the server directory:
+**Total Requests (Prometheus)**
+![total-prom](https://github.com/badarosama/metrics/assets/549487/a1caf604-8fd4-442c-8c5f-1d6e09c2fc36)
 
-    ```bash
-    cd metrics
-    ```
+**Total Requests (Client)**
+![total-client](https://github.com/badarosama/metrics/assets/549487/a8438b4e-b58d-4eb3-a535-1303ee9d5713)
 
-2. Build and run the server:
+**Request Rate**
+![rate](https://github.com/badarosama/metrics/assets/549487/562b3b61-cf4f-4835-aaac-96dbdd4808c6)
 
-    ```bash
-    go run ./server/server
-    ```
+### Prometheus Queries
 
-3. The server will start listening on port `8080`.
-
-### Prometheus Instrumentation
-
-The server is instrumented with Prometheus metrics to track request counts and durations. These metrics can be scraped by Prometheus and visualized using Grafana. To view the metrics:
-
-- Install Prometheus.
-- Ensure Prometheus is configured to scrape metrics from the Metrics Server. This can typically be done by adding a scrape configuration in Prometheus configuration file.
-- Access Prometheus dashboard on `localhost:9090` to view and query the collected metrics.
-
-## Client
-
-### Configuration
-
-Before running the client, ensure that you have the necessary configuration files:
-
-- `./client/certs/ca.crt`: CA certificate file for TLS encryption.
-- `./client/certs/client.crt`: Client certificate file for TLS encryption.
-- `./client/certs/client.key`: Client private key file for TLS encryption.
-
-### Running the Client
-
-1. Navigate to the client directory:
-
-    ```bash
-    cd metrics
-    ```
-
-2. Build and run the client:
-
-    ```bash
-    go run ./client/client.go -filename <path_to_request_json> -duration <load_test_duration_seconds> -concurrent <num_concurrent_requests>
-    ```
-
-    Replace `<path_to_request_json>` with the path to the JSON file containing the request data, `<load_test_duration_minutes>` with the duration of the load test in minutes, and `<num_concurrent_requests>` with the number of concurrent requests to be made.
-
-3. The client will send requests to the server and display statistics after the test duration.
-
-## Load Test
-a. Request Durations.
-1. 90th percentile. 4.5 ms
-   ![Screenshot 2024-05-18 at 10 14 48 PM](https://github.com/badarosama/metrics/assets/549487/5c630b00-b3c2-4157-a0ef-acde953c565d)
-2.95th percentile. 4.5ms
-   ![Screenshot 2024-05-18 at 10 16 46 PM](https://github.com/badarosama/metrics/assets/549487/62c8dd00-00f3-4a44-9a44-33a492528bc1)
-3- 99th percentile. approx: 4.7ms
-![Screenshot 2024-05-18 at 10 17 21 PM](https://github.com/badarosama/metrics/assets/549487/53fb8379-f0a6-4e24-8e01-4a400d954dc3)
-
-
-
-4- Total # of requests. approx: 12.6 Million.
-
-![Screenshot 2024-05-19 at 10 28 17 AM](https://github.com/badarosama/metrics/assets/549487/a1caf604-8fd4-442c-8c5f-1d6e09c2fc36)
-
-Client Stats: approx: 13 million.
-![Screenshot 2024-05-19 at 10 29 30 AM](https://github.com/badarosama/metrics/assets/549487/a8438b4e-b58d-4eb3-a535-1303ee9d5713)
-
-The windows are not accurately calculated and prometheus extrapolates data in some cases as explained here:https://www.youtube.com/watch?v=7uy_yovtyqw
-
-5-Request Rate: 4.5k/s
-
-![Screenshot 2024-05-19 at 10 34 34 AM](https://github.com/badarosama/metrics/assets/549487/562b3b61-cf4f-4835-aaac-96dbdd4808c6)
-
-
-Queries Ran:
+```promql
+# Latency percentiles
 histogram_quantile(0.90, sum(rate(grpc_request_duration_seconds_bucket[5m])) by (le))
 histogram_quantile(0.95, sum(rate(grpc_request_duration_seconds_bucket[5m])) by (le))
 histogram_quantile(0.99, sum(rate(grpc_request_duration_seconds_bucket[5m])) by (le))
-sum(grpc_request_count)
+
+# Throughput
 rate(grpc_request_count[1m])
-sum(grpc_request_count{code="OK"})
+
+# Total requests / error rate
+sum(grpc_request_count)
 sum(grpc_request_count) - sum(grpc_request_count{code="OK"})
+```
 
-## Cached Requests
+## Response Caching
 
-The Metrics Server employs a cache mechanism to store the last 10 successful and error responses. This cache is implemented using a circular queue data structure, providing efficient memory utilization and optimized access to the most recent responses.
+The server maintains two fixed-size circular queues (ring buffers) to cache the last 10 successful and last 10 error responses. The implementation uses a head/tail pointer approach with `sync.Mutex` for thread safety, providing O(1) enqueue with zero allocations after initialization. When the buffer is full, the oldest entry is overwritten — guaranteeing a constant memory footprint regardless of request volume.
 
-### Circular Queue Implementation
+See [`server/queue.go`](server/queue.go) for the implementation.
 
-The circular queue is implemented in the server codebase to efficiently manage the cache. Here's how it works:
+## Project Structure
 
-- **Initialization**: The circular queue is initialized with a fixed size, which in this case is set to 10 to store the last 10 responses.
-
-- **Enqueue Operation**: When a new request is received and processed successfully or results in an error, the corresponding response along with its timestamp is enqueued into the circular queue.
-
-- **Efficient Memory Utilization**: The circular queue ensures efficient memory utilization by reusing memory slots. As new responses are enqueued, if the queue is full, it overwrites the oldest response, thus maintaining a fixed memory footprint.
-
-- **Head and Tail Pointers**: The circular queue maintains two pointers, namely the head and tail pointers. These pointers keep track of the starting and ending positions of the queue, respectively.
-
-- **Optimized Access**: The circular queue allows for optimized access to the most recent responses. By keeping track of the head and tail pointers, it facilitates constant-time access to the first and last elements of the queue.
-
-### Benefits
-
-The use of a circular queue for caching offers several advantages:
-
-1. **Constant-Time Operations**: Enqueueing and dequeueing operations have constant time complexity, ensuring efficient processing of requests.
-
-2. **Fixed Memory Footprint**: The queue size remains constant, resulting in predictable memory consumption, which is crucial for resource-constrained environments.
-
-3. **Efficient Memory Utilization**: Memory slots are reused, preventing memory fragmentation and optimizing memory usage.
-
-4. **Optimized Access**: Access to the most recent responses is optimized through the head and tail pointers, facilitating quick retrieval of cached data.
-
+```
+metrics/
+├── server/
+│   ├── server.go          # Server init, TLS, gRPC setup, keepalive config
+│   ├── api.go             # Export() and GetVersion() RPC handlers
+│   ├── queue.go           # CircularQueue ring buffer implementation
+│   ├── metrics.go         # Prometheus counter + histogram definitions
+│   ├── middleware.go      # gRPC unary interceptor for metrics collection
+│   ├── config.yaml        # Logger configuration
+│   ├── version/           # Build-time version injection
+│   ├── pb/                # Generated protobuf code
+│   └── scripts/           # Build script with ldflags
+├── client/
+│   ├── client.go          # Load testing client with concurrent workers
+│   ├── request_jsons/     # Sample valid/invalid request payloads
+│   └── pb/                # Generated protobuf code
+├── protos/
+│   ├── version.proto      # VersionService definition
+│   └── opentelemetry-proto/  # OTel metric proto definitions (submodule)
+├── certs/                 # TLS certificates + generation script
+├── go.mod
+└── README.md
+```
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE).
+[MIT](LICENSE)
