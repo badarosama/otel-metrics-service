@@ -1,4 +1,4 @@
-# Metrics
+# otel-metrics-service
 
 A high-performance gRPC metrics server and load-testing client built in Go. Implements the OpenTelemetry metrics export protocol with mutual TLS authentication, Prometheus instrumentation, and a built-in concurrent load tester that sustains **4,500 req/s at sub-5ms p99 latency**.
 
@@ -38,7 +38,7 @@ Client ──── mTLS ──────► │  Interceptor ──► Export
 ### Server
 
 ```bash
-git clone https://github.com/badarosama/metrics.git
+git clone https://github.com/badarosama/otel-metrics-service.git
 cd metrics
 go mod tidy
 
